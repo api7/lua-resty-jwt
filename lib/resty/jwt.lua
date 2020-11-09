@@ -334,7 +334,8 @@ function _M.jwt_encode(self, ori, is_payload)
   if type(ori) == str_const.table then
     ori = is_payload and get_payload_encoder(self)(ori) or cjson_encode(ori)
   end
-  return ngx_encode_base64(ori):gsub(str_const.plus, str_const.dash):gsub(str_const.slash, str_const.underscore):gsub(str_const.equal, str_const.empty)
+  local res = ngx_encode_base64(ori):gsub(str_const.plus, str_const.dash):gsub(str_const.slash, str_const.underscore):gsub(str_const.equal, str_const.empty)
+  return res
 end
 
 
