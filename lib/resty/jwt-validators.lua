@@ -30,7 +30,10 @@ local _M = {_VERSION="0.2.2"}
 ]]--
 local function define_validator(name, fx)
   _M["opt_" .. name] = fx
-  _M[name] = function(...) return _M.chain(_M.required(), fx(...)) end
+  local f = function (...)
+    return _M.chain(_M.required(), fx(...))
+  end
+  _M[name] = function(...) return f(...) end
 end
 
 -- Validation messages
@@ -155,14 +158,18 @@ end
     additional check.  This function will be used in the "required_*" shortcut
     functions for simplification.
 ]]--
-function _M.required(chain_function)
-  if chain_function ~= nil then
-    return _M.chain(_M.required(), chain_function)
-  end
-
-  return function(val, claim, jwt_json)
+do
+  local function default_required(val, claim, jwt_json)
     ensure_not_nil(val, messages.required_claim, claim)
     return true
+  end
+
+  function _M.required(chain_function)
+    if chain_function ~= nil then
+      return _M.chain(_M.required(), chain_function)
+    end
+
+    return default_required
   end
 end
 
@@ -363,15 +370,24 @@ end
     within the system's leeway.  This means that:
       val <= (system_clock() + system_leeway).
 ]]--
-define_validator("is_not_before", function()
-  return format_date_on_error(
-     _M.chain(validate_is_date,
-        function(val)
-           return val and less_than_or_equal_function(val, (system_clock() + system_leeway))
-        end),
-     "not valid until"
-  )
-end)
+do
+  local function not_valid_until(val)
+    return val and less_than_or_equal_function(val, (system_clock() + system_leeway))
+  end
+
+  local funcs = {validate_is_date, not_valid_until}
+
+  define_validator("is_not_before", function()
+    return function(val, claim, jwt_json)
+      for _, fx in ipairs(funcs) do
+        if fx(val, claim, jwt_json) == false then
+          error(string.format("'%s' claim not valid until %s", claim, ngx.http_time(val)), 0)
+        end
+      end
+      return true
+    end
+  end)
+end
 
 
 --[[
@@ -379,15 +395,24 @@ end)
     tested value within the system's leeway.  This means that:
       val > (system_clock() - system_leeway).
 ]]--
-define_validator("is_not_expired", function()
-  return format_date_on_error(
-     _M.chain(validate_is_date,
-       function(val)
-          return val and greater_than_function(val, (system_clock() - system_leeway))
-       end),
-     "expired at"
-  )
-end)
+do
+  local function expired_at(val)
+    return val and greater_than_function(val, (system_clock() - system_leeway))
+  end
+
+  local funcs = {validate_is_date, expired_at}
+
+  define_validator("is_not_expired", function()
+    return function(val, claim, jwt_json)
+      for _, fx in ipairs(funcs) do
+        if fx(val, claim, jwt_json) == false then
+          error(string.format("'%s' claim expired at %s", claim, ngx.http_time(val)), 0)
+        end
+      end
+      return true
+    end
+  end)
+end
 
 --[[
     Returns a validator that checks if the current time is the same as the tested value
