@@ -1,4 +1,7 @@
 local cjson = require "cjson.safe"
+local ffi = require "ffi"
+local ffi_new = ffi.new
+local ffi_string = ffi.string
 
 local aes = require "resty.aes"
 local evp = require "resty.evp"
@@ -15,6 +18,7 @@ local string_rep = string.rep
 local string_format = string.format
 local string_sub = string.sub
 local string_char = string.char
+local string_byte = string.byte
 local table_concat = table.concat
 local ngx_encode_base64 = ngx.encode_base64
 local ngx_decode_base64 = ngx.decode_base64
@@ -26,10 +30,9 @@ local tostring = tostring
 local str_const = {
   invalid_jwt= "invalid jwt string",
   regex_join_msg = "%s.%s",
-  regex_join_delim = "([^%s]+)",
-  regex_split_dot = "%.",
   regex_jwt_join_str = "%s.%s.%s",
   raw_underscore  = "raw_",
+  dot = ".",
   dash = "-",
   empty = "",
   dotdot = "..",
@@ -38,6 +41,11 @@ local str_const = {
   equal = "=",
   underscore = "_",
   slash = "/",
+  byte_plus = string_byte("+"),
+  byte_dash = string_byte("-"),
+  byte_underscore = string_byte("_"),
+  byte_slash = string_byte("/"),
+  byte_equal = string_byte("="),
   header = "header",
   typ = "typ",
   JWT = "JWT",
@@ -81,14 +89,44 @@ local str_const = {
   everything_awesome = "everything is awesome~ :p"
 }
 
--- @function split string
-local function split_string(str, delim)
-  local result = {}
-  local sep = string_format(str_const.regex_join_delim, delim)
-  for m in str:gmatch(sep) do
-    result[#result+1]=m
+-- @function reuse string buffer
+local get_string_buf
+do
+  local str_buf_size = 4096
+  local str_buf
+  local c_buf_type = ffi.typeof("char[?]")
+
+  function get_string_buf(size, must_alloc)
+    if size > str_buf_size then
+      return ffi_new(c_buf_type, size)
+    end
+
+    if not str_buf then
+      str_buf = ffi_new(c_buf_type, str_buf_size)
+    end
+
+    return str_buf
   end
-  return result
+end
+
+-- @function split string
+local function split_string(s, sep)
+  local res = {}
+
+  if #s > 0 then
+    local n, start = 1, 1
+    local first,last = s:find(sep, start, true)
+    while first do
+      res[n] = s:sub(start, first-1)
+      n = n+1
+      start = last+1
+      first,last = s:find(sep, start, true)
+    end
+
+    res[n] = s:sub(start)
+  end
+
+  return res
 end
 
 -- @function is nil or boolean
@@ -313,7 +351,7 @@ end
 -- @param token string
 -- @return jwt/jwe tables
 local function parse(self, secret, token_str)
-  local tokens = split_string(token_str, str_const.regex_split_dot)
+  local tokens = split_string(token_str, str_const.dot)
   local num_tokens = #tokens
   if num_tokens == 3 then
     return  parse_jwt(tokens[1], tokens[2], tokens[3])
@@ -334,19 +372,52 @@ function _M.jwt_encode(self, ori, is_payload)
   if type(ori) == str_const.table then
     ori = is_payload and get_payload_encoder(self)(ori) or cjson_encode(ori)
   end
-  return ngx_encode_base64(ori):gsub(str_const.plus, str_const.dash):gsub(str_const.slash, str_const.underscore):gsub(str_const.equal, str_const.empty)
+
+  ori = ngx_encode_base64(ori)
+  local len = #ori
+  local buf = get_string_buf(len)
+  local j = 0
+  for i = 1, len do
+    local b = string_byte(ori, i, i)
+    if b == str_const.byte_plus then
+      buf[j] = str_const.byte_dash
+    elseif b == str_const.byte_slash then
+      buf[j] = str_const.byte_underscore
+    elseif b ~= str_const.byte_equal then
+      buf[j] = b
+    else
+      break
+    end
+
+    j = j + 1
+  end
+
+  return ffi_string(buf, j)
 end
 
 
 
 --@function jwt decode : decode bas64 encoded string
 function _M.jwt_decode(self, b64_str, json_decode, is_payload)
-  b64_str = b64_str:gsub(str_const.dash, str_const.plus):gsub(str_const.underscore, str_const.slash)
-
-  local reminder = #b64_str % 4
-  if reminder > 0 then
-    b64_str = b64_str .. string_rep(str_const.equal, 4 - reminder)
+  local b64_len = #b64_str
+  local reminder = b64_len % 4
+  local buf = get_string_buf(b64_len + reminder)
+  for i = 1, b64_len do
+    local b = string_byte(b64_str, i)
+    if b == str_const.byte_dash then
+      buf[i - 1] = str_const.byte_plus
+    elseif b == str_const.byte_underscore then
+      buf[i - 1] = str_const.byte_slash
+    else
+      buf[i - 1] = b
+    end
   end
+
+  for i = b64_len + 1, b64_len + reminder do
+    buf[i - 1] = str_const.byte_equal
+  end
+
+  b64_str = ffi_string(buf, b64_len + reminder)
   local data = ngx_decode_base64(b64_str)
   if not data then
     return nil
@@ -714,29 +785,31 @@ local function get_claim_spec_from_legacy_options(self, options)
   return claim_spec
 end
 
-local function is_legacy_validation_options(options)
-
-  -- Validation options MUST be a table
-  if type(options) ~= str_const.table then
-    return false
-  end
-
-  -- Validation options MUST have at least one of these, and must ONLY have these
+local is_legacy_validation_options
+do
   local legacy_options = { }
   legacy_options[str_const.valid_issuers]=1
   legacy_options[str_const.lifetime_grace_period]=1
   legacy_options[str_const.require_nbf_claim]=1
   legacy_options[str_const.require_exp_claim]=1
 
-  local is_legacy = false
-  for k in pairs(options) do
-    if legacy_options[k] ~= nil then
-      is_legacy = true
-    else
+  function is_legacy_validation_options(options)
+    -- Validation options MUST be a table
+    if type(options) ~= str_const.table then
       return false
     end
+
+    -- Validation options MUST have at least one of these, and must ONLY have these
+    local is_legacy = false
+    for k in pairs(options) do
+      if legacy_options[k] ~= nil then
+        is_legacy = true
+      else
+        return false
+      end
+    end
+    return is_legacy
   end
-  return is_legacy
 end
 
 -- Validates the claims for the given (parsed) object

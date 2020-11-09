@@ -32,7 +32,7 @@ __DATA__
 --- request
 GET /t
 --- response_body
-urlsafe b64encoded {foo: bar}: eyJmb28iOiJiYXIifQ2
+urlsafe b64encoded {foo: bar}: eyJmb28iOiJiYXIifQ
 --- no_error_log
 [error]
 
@@ -52,7 +52,7 @@ urlsafe b64encoded {foo: bar}: eyJmb28iOiJiYXIifQ2
 --- request
 GET /t
 --- response_body
-urlsafe b64encoded {foo: bar}: eyJmb28iOiJiYXIifQ2
+urlsafe b64encoded {foo: bar}: eyJmb28iOiJiYXIifQ
 --- no_error_log
 [error]
 
