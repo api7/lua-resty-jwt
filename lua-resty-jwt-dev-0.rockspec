@@ -15,7 +15,8 @@ description = {
   license = 'Apache License Version 2'
 }
 dependencies = {
-  'lua >= 5.1'
+  'lua >= 5.1',
+  'lua-resty-openssl >= 0.6.8'
 }
 build = {
   type = 'builtin',
