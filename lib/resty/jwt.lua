@@ -1,9 +1,9 @@
 local cjson = require "cjson.safe"
 
-local aes = require "resty.aes"
 local evp = require "resty.evp"
 local hmac = require "resty.hmac"
 local resty_random = require "resty.random"
+local cipher = require "resty.openssl.cipher"
 
 local _M = {_VERSION="0.2.2"}
 
@@ -21,6 +21,13 @@ local ngx_decode_base64 = ngx.decode_base64
 local cjson_encode = cjson.encode
 local cjson_decode = cjson.decode
 local tostring = tostring
+local error = error
+local ipairs = ipairs
+local type = type
+local pcall = pcall
+local assert = assert
+local setmetatable = setmetatable
+local pairs = pairs
 
 -- define string constants to avoid string garbage collection
 local str_const = {
@@ -52,8 +59,6 @@ local str_const = {
   nbf = "nbf",
   iss = "iss",
   full_obj = "__jwt",
-  AES = "AES",
-  cbc = "cbc",
   x5c = "x5c",
   x5u = 'x5u',
   HS256 = "HS256",
@@ -63,7 +68,11 @@ local str_const = {
   ES512 = "ES512",
   RS512 = "RS512",
   A128CBC_HS256 = "A128CBC-HS256",
+  A128CBC_HS256_CIPHER_MODE = "aes-128-cbc",
   A256CBC_HS512 = "A256CBC-HS512",
+  A256CBC_HS512_CIPHER_MODE = "aes-256-cbc",
+  A256GCM = "A256GCM",
+  A256GCM_CIPHER_MODE = "aes-256-gcm",
   RSA_OAEP_256 = "RSA-OAEP-256",
   DIR = "dir",
   reason = "reason",
@@ -126,45 +135,57 @@ end
 --@param encrypted payload
 --@param encryption algorithm
 --@param iv which was generated while encrypting the payload
+--@param aad additional authenticated data (used when gcm mode is used)
+--@param auth_tag authenticated tag (used when gcm mode is used)
 --@return decrypted payloaf
-local function decrypt_payload(secret_key, encrypted_payload, enc, iv_in )
-  local decrypted_payload
+local function decrypt_payload(secret_key, encrypted_payload, enc, iv_in, aad, auth_tag )
+  local decrypted_payload, err
   if enc == str_const.A128CBC_HS256 then
-    local aes_128_cbc_with_iv = assert(aes:new(secret_key, str_const.AES, aes.cipher(128,str_const.cbc), {iv=iv_in} ))
-    decrypted_payload=  aes_128_cbc_with_iv:decrypt(encrypted_payload)
+    local aes_128_cbs_cipher = assert(cipher.new(str_const.A128CBC_HS256_CIPHER_MODE))
+    decrypted_payload, err=  aes_128_cbs_cipher:decrypt(secret_key, iv_in, encrypted_payload)
   elseif enc == str_const.A256CBC_HS512 then
-    local aes_256_cbc_with_iv = assert(aes:new(secret_key, str_const.AES, aes.cipher(256,str_const.cbc), {iv=iv_in} ))
-    decrypted_payload=  aes_256_cbc_with_iv:decrypt(encrypted_payload)
-
+    local aes_256_cbs_cipher = assert(cipher.new(str_const.A256CBC_HS512_CIPHER_MODE))
+    decrypted_payload, err =  aes_256_cbs_cipher:decrypt(secret_key, iv_in, encrypted_payload)
+  elseif enc == str_const.A256GCM then
+    local aes_256_gcm_cipher = assert(cipher.new(str_const.A256GCM_CIPHER_MODE))
+    decrypted_payload, err =  aes_256_gcm_cipher:decrypt(secret_key, iv_in, encrypted_payload, false, aad, auth_tag)
   else
     return nil, "unsupported enc: " .. enc
   end
-  if not  decrypted_payload then
-    return nil, "invalid secret key"
+  if not  decrypted_payload or err then
+    return nil, err
   end
   return decrypted_payload
 end
 
--- @function : encrypt payload using given secret
--- @param secret key to encrypt
--- @param algortim to use for encryption
--- @message  : data to be encrypted. It could be lua table or string
-local function encrypt_payload(secret_key, message, enc )
+-- @function  encrypt payload using given secret
+-- @param secret_key secret key to encrypt
+-- @param message  data to be encrypted. It could be lua table or string
+-- @param enc algorithm to use for encryption
+-- @param aad additional authenticated data (used when gcm mode is used)
+local function encrypt_payload(secret_key, message, enc, aad )
 
   if enc == str_const.A128CBC_HS256 then
     local iv_rand =  resty_random.bytes(16,true)
-    local aes_128_cbc_with_iv = assert(aes:new(secret_key, str_const.AES, aes.cipher(128,str_const.cbc), {iv=iv_rand} ))
-    local encrypted = aes_128_cbc_with_iv:encrypt(message)
+    local aes_128_cbs_cipher = assert(cipher.new(str_const.A128CBC_HS256_CIPHER_MODE))
+    local encrypted = aes_128_cbs_cipher:encrypt(secret_key, iv_rand, message)
     return encrypted, iv_rand
 
   elseif enc == str_const.A256CBC_HS512 then
     local iv_rand =  resty_random.bytes(16,true)
-    local aes_256_cbc_with_iv = assert(aes:new(secret_key, str_const.AES, aes.cipher(256,str_const.cbc), {iv=iv_rand} ))
-    local encrypted = aes_256_cbc_with_iv:encrypt(message)
+    local aes_256_cbs_cipher = assert(cipher.new(str_const.A256CBC_HS512_CIPHER_MODE))
+    local encrypted = aes_256_cbs_cipher:encrypt(secret_key, iv_rand, message)
     return encrypted, iv_rand
 
+  elseif enc == str_const.A256GCM then
+    local iv_rand =  resty_random.bytes(12,true) -- 96 bit IV is recommended for efficiency
+    local aes_256_gcm_cipher = assert(cipher.new(str_const.A256GCM_CIPHER_MODE))
+    local encrypted = aes_256_gcm_cipher:encrypt(secret_key, iv_rand, message, false, aad)
+    local auth_tag = assert(aes_256_gcm_cipher:get_aead_tag())
+    return encrypted, iv_rand, auth_tag
+
   else
-    return nil, nil , "unsupported enc: " .. enc
+    return nil, nil , nil, "unsupported enc: " .. enc
   end
 end
 
@@ -189,7 +210,9 @@ end
 local function derive_keys(enc, secret_key)
   local mac_key_len, enc_key_len = 16, 16
 
-  if enc == str_const.A128CBC_HS256 then
+  if enc == str_const.A256GCM then
+    mac_key_len, enc_key_len = 0, 32 -- we need 256 bit key
+  elseif enc == str_const.A128CBC_HS256 then
     mac_key_len, enc_key_len = 16, 16
   elseif enc == str_const.A256CBC_HS512 then
     mac_key_len, enc_key_len = 32, 32
@@ -208,7 +231,7 @@ local function derive_keys(enc, secret_key)
   end
 
   local mac_key = string_sub(secret_key, 1, mac_key_len)
-  local enc_key = string_sub(secret_key, enc_key_len + 1)
+  local enc_key = string_sub(secret_key, mac_key_len + 1)
   return secret_key, mac_key, enc_key
 end
 
@@ -248,18 +271,18 @@ local function parse_jwe(self, preshared_key, encoded_header, encoded_encrypted_
     end
     local rsa_decryptor, err = evp.RSADecryptor:new(preshared_key, nil, evp.CONST.RSA_PKCS1_OAEP_PADDING, evp.CONST.SHA256_DIGEST)
     if err then
-        error({reason="failed to create rsa object ".. err})
+        error({reason="failed to create rsa object: ".. err})
     end
     local secret_key, err = rsa_decryptor:decrypt(_M:jwt_decode(encoded_encrypted_key))
     if err or not secret_key then
-       error({reason="failed to decrypt key" .. err})
+       error({reason="failed to decrypt key: " .. err})
     end
     key, _, enc_key = derive_keys(header.enc, secret_key)
   end
 
   local cipher_text = _M:jwt_decode(encoded_cipher_text)
   local iv =  _M:jwt_decode(encoded_iv)
-
+  local signature_or_tag = _M:jwt_decode(encoded_auth_tag)
   local basic_jwe = {
     internal = {
       encoded_header = encoded_header,
@@ -267,13 +290,13 @@ local function parse_jwe(self, preshared_key, encoded_header, encoded_encrypted_
       key = key,
       iv = iv
     },
-    header=header,
-    signature=_M:jwt_decode(encoded_auth_tag)
+    header = header,
+    signature = signature_or_tag
   }
 
-  local payload, err = decrypt_payload(enc_key, cipher_text, header.enc, iv)
-  if not payload then
-    basic_jwe.reason = err
+  local payload, err = decrypt_payload(enc_key, cipher_text, header.enc, iv, encoded_header, signature_or_tag)
+  if err  then
+    error({reason="failed to decrypt payload: " .. err})
 
   else
     basic_jwe.payload = get_payload_decoder(self)(payload)
@@ -438,6 +461,8 @@ local function sign_jwe(self, secret_key, jwt_obj)
 
   -- TODO: implement logic for creating enc key and mac key and then encrypt key
   local key, encrypted_key, mac_key, enc_key
+  local encoded_header = _M:jwt_encode(header)
+  local payload_to_encrypt = get_payload_encoder(self)(jwt_obj.payload)
   if alg ==  str_const.DIR then
     _, mac_key, enc_key = derive_keys(enc, secret_key)
     encrypted_key = ""
@@ -464,17 +489,17 @@ local function sign_jwe(self, secret_key, jwt_obj)
     error({reason="unsupported alg: " .. alg})
   end
 
-  local payload_to_encrypt = get_payload_encoder(self)(jwt_obj.payload)
-  local cipher_text, iv, err = encrypt_payload(enc_key, payload_to_encrypt, enc)
+  local cipher_text, iv, auth_tag, err = encrypt_payload(enc_key, payload_to_encrypt, enc, encoded_header)
   if err then
     error({reason="error while encrypting payload. Error: " .. err})
   end
 
-  local encoded_header = _M:jwt_encode(header)
-  local encoded_header_length = binlen(encoded_header)
-  local mac_input = table_concat({encoded_header , iv, cipher_text , encoded_header_length})
-  local mac = hmac_digest(enc, mac_key, mac_input)
-  local auth_tag = string_sub(mac, 1, #mac/2)
+  if not auth_tag then
+    local encoded_header_length = binlen(encoded_header)
+    local mac_input = table_concat({encoded_header , iv, cipher_text , encoded_header_length})
+    local mac = hmac_digest(enc, mac_key, mac_input)
+    auth_tag = string_sub(mac, 1, #mac/2)
+  end
 
   local jwe_table = {encoded_header, _M:jwt_encode(encrypted_key), _M:jwt_encode(iv),
     _M:jwt_encode(cipher_text),   _M:jwt_encode(auth_tag)}
@@ -593,23 +618,26 @@ function _M.load_jwt(self, jwt_str, secret)
 end
 
 --@function verify jwe object
---@param secret
 --@param jwt object
 --@return jwt object with reason whether verified or not
-local function verify_jwe_obj(secret, jwt_obj)
-  local _, mac_key, _ = derive_keys(jwt_obj.header.enc, jwt_obj.internal.key)
-  local encoded_header = jwt_obj.internal.encoded_header
+local function verify_jwe_obj(jwt_obj)
 
-  local encoded_header_length = binlen(encoded_header)
-  local mac_input = table_concat({encoded_header , jwt_obj.internal.iv, jwt_obj.internal.cipher_text , encoded_header_length})
-  local mac = hmac_digest(jwt_obj.header.enc, mac_key,  mac_input)
-  local auth_tag = string_sub(mac, 1, #mac/2)
+  if jwt_obj[str_const.header][str_const.enc]  ~= str_const.A256GCM then -- tag gets authenticated during decryption
+    local _, mac_key, _ = derive_keys(jwt_obj.header.enc, jwt_obj.internal.key)
+    local encoded_header = jwt_obj.internal.encoded_header
 
-  if auth_tag ~= jwt_obj.signature then
-    jwt_obj[str_const.reason] = "signature mismatch: " ..
-    tostring(jwt_obj[str_const.signature])
+    local encoded_header_length = binlen(encoded_header)
+    local mac_input = table_concat({encoded_header , jwt_obj.internal.iv, jwt_obj.internal.cipher_text,
+                                    encoded_header_length})
+    local mac = hmac_digest(jwt_obj.header.enc, mac_key,  mac_input)
+    local auth_tag = string_sub(mac, 1, #mac/2)
 
+    if auth_tag ~= jwt_obj.signature then
+      jwt_obj[str_const.reason] = "signature mismatch: " ..
+      tostring(jwt_obj[str_const.signature])
+    end
   end
+
   jwt_obj.internal = nil
   jwt_obj.signature = nil
 
@@ -795,8 +823,8 @@ function _M.verify_jwt_obj(self, secret, jwt_obj, ...)
   end
 
   -- if jwe, invoked verify jwe
-  if jwt_obj[str_const.header][str_const.enc] then
-    return verify_jwe_obj(secret, jwt_obj)
+  if jwt_obj[str_const.header][str_const.enc]  then
+    return verify_jwe_obj(jwt_obj)
   end
 
   local alg = jwt_obj[str_const.header][str_const.alg]
