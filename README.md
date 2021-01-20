@@ -17,14 +17,9 @@ lua-resty-jwt - [JWT](http://self-issued.info/docs/draft-jones-json-web-token-01
 
 # Installation
 
-- opm: `opm get cdbattags/lua-resty-jwt`
 - luarocks: `luarocks install lua-resty-jwt`
+- ~~opm: `opm get cdbattags/lua-resty-jwt`~~ (deprecated for 0.2+)
 - Head to [release page](https://github.com/cdbattags/lua-resty-jwt/releases) and download `tar.gz`
-
-# Version
-
-
-0.2.2
 
 
 # Table of Contents
