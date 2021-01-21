@@ -1,3 +1,4 @@
+rockspec_format = '3.0'
 package = 'lua-resty-jwt'
 version = 'dev-0'
 source = {
