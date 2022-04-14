@@ -475,7 +475,7 @@ local function sign_jwe(self, secret_key, jwt_obj)
         cert, err = evp.PublicKey:new(secret_key)
     end
     if not cert then
-        error({reason="Decode secret is not a valid cert/public key: " .. err or ""})
+        error({reason="Decode secret is not a valid cert/public key: " .. (err or "")})
     end
     local rsa_encryptor = evp.RSAEncryptor:new(cert, evp.CONST.RSA_PKCS1_OAEP_PADDING, evp.CONST.SHA256_DIGEST)
     if err then
