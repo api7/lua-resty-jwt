@@ -51,4 +51,4 @@ jobs:
           LUAROCKS_TOKEN: ${{ secrets.LUAROCKS_TOKEN }}
         run: |
           luarocks install dkjson
-          luarocks upload rockspec/lua-resty-jwt-${{ steps.release_env.outputs.version_withou_v }}-0.rockspec --api-key=${LUAROCKS_TOKEN}
+          luarocks upload rockspec/api7-lua-resty-jwt-${{ steps.release_env.outputs.version_withou_v }}-0.rockspec --api-key=${LUAROCKS_TOKEN}
