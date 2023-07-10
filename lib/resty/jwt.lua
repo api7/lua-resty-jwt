@@ -284,6 +284,7 @@ local function parse_jwe(self, preshared_key, encoded_header, encoded_encrypted_
   local iv =  _M:jwt_decode(encoded_iv)
   local signature_or_tag = _M:jwt_decode(encoded_auth_tag)
   local basic_jwe = {
+    typ = str_const.JWE,
     internal = {
       encoded_header = encoded_header,
       cipher_text = cipher_text,
@@ -322,6 +323,7 @@ local function parse_jwt(encoded_header, encoded_payload, signature)
   end
 
   local basic_jwt = {
+    typ = str_const.JWT,
     raw_header=encoded_header,
     raw_payload=encoded_payload,
     header=header,
@@ -549,7 +551,7 @@ function _M.sign(self, secret_key, jwt_obj)
     end
   end
 
-  if typ == str_const.JWE or jwt_obj.header.enc then
+  if jwt_obj.typ == str_const.JWE or (jwt_obj.typ == nil and (typ == str_const.JWE or jwt_obj.header.enc)) then
     return sign_jwe(self, secret_key, jwt_obj)
   end
   -- header alg check
@@ -824,11 +826,16 @@ function _M.verify_jwt_obj(self, secret, jwt_obj, ...)
   end
 
   -- if jwe, invoked verify jwe
-  if jwt_obj[str_const.header][str_const.enc]  then
+  if jwt_obj.typ == str_const.JWE or (jwt_obj.typ == nil and jwt_obj.internal ~= nil and jwt_obj[str_const.header][str_const.enc]) then
     return verify_jwe_obj(jwt_obj)
   end
 
   local alg = jwt_obj[str_const.header][str_const.alg]
+
+  if alg == nil then
+    jwt_obj[str_const.reason] = "No algorithm supplied"
+    return jwt_obj
+  end
 
   local jwt_str = string_format(str_const.regex_jwt_join_str, jwt_obj.raw_header , jwt_obj.raw_payload , jwt_obj.signature)
 

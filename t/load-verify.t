@@ -804,3 +804,55 @@ everything is awesome~ :p
 test
 --- no_error_log
 [error]
+
+=== TEST 26: Verify invalid JWT which looks like a JWE
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local jwt = require "resty.jwt"
+            local jwt_str = "eyJ0eXAiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIn0" ..
+                ".eyJmb28iOiJiYXIifQ" ..
+                ".signature"
+
+            local jwt_obj = jwt:load_jwt(jwt_str)
+            local verified_obj = jwt:verify_jwt_obj(
+                "lua-resty-jwt", jwt_obj, { }
+            )
+            ngx.say(jwt_obj["verified"])
+            ngx.say(jwt_obj["reason"])
+        ';
+    }
+--- request
+GET /t
+--- response_body
+false
+No algorithm supplied
+--- no_error_log
+[error]
+
+=== TEST 26: Verify invalid JWT which looks like a JWE with alg
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local jwt = require "resty.jwt"
+            local jwt_str = "eyJ0eXAiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiSFMyNTYifQ" ..
+                ".eyJmb28iOiJiYXIifQ" ..
+                ".signature"
+
+            local jwt_obj = jwt:load_jwt(jwt_str)
+            local verified_obj = jwt:verify_jwt_obj(
+                "lua-resty-jwt", jwt_obj, { }
+            )
+            ngx.say(jwt_obj["verified"])
+            ngx.say(jwt_obj["reason"])
+        ';
+    }
+--- request
+GET /t
+--- response_body
+false
+signature mismatch: signature
+--- no_error_log
+[error]
