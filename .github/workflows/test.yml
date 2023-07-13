@@ -37,7 +37,6 @@ jobs:
           git submodule update --init --recursive
 
       - name: Install hmac.lua
-        id: install hmac lib
         shell: bash
         run: |
           mkdir -p third-party/lua-resty-hmac/lib/resty/
