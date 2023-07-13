@@ -826,7 +826,7 @@ function _M.verify_jwt_obj(self, secret, jwt_obj, ...)
   end
 
   -- if jwe, invoked verify jwe
-  if jwt_obj.typ == str_const.JWE or (jwt_obj.typ == nil and jwt_obj.internal ~= nil and jwt_obj[str_const.header][str_const.enc]) then
+  if jwt_obj.typ == str_const.JWE then
     return verify_jwe_obj(jwt_obj)
   end
 
