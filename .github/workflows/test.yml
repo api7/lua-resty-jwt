@@ -15,8 +15,8 @@ on:
       - '**/*.md'
 
 jobs:
-  release:
-    name: Release
+  test:
+    name: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
