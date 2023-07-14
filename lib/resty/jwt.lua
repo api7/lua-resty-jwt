@@ -284,6 +284,7 @@ local function parse_jwe(self, preshared_key, encoded_header, encoded_encrypted_
   local iv =  _M:jwt_decode(encoded_iv)
   local signature_or_tag = _M:jwt_decode(encoded_auth_tag)
   local basic_jwe = {
+    typ = str_const.JWE,
     internal = {
       encoded_header = encoded_header,
       cipher_text = cipher_text,
@@ -322,6 +323,7 @@ local function parse_jwt(encoded_header, encoded_payload, signature)
   end
 
   local basic_jwt = {
+    typ = str_const.JWT,
     raw_header=encoded_header,
     raw_payload=encoded_payload,
     header=header,
@@ -622,6 +624,10 @@ end
 --@param jwt object
 --@return jwt object with reason whether verified or not
 local function verify_jwe_obj(jwt_obj)
+  if jwt_obj[str_const.header][str_const.enc] == nil then
+    jwt_obj[str_const.reason] = "JWE without enc"
+    return jwt_object
+  end
 
   if jwt_obj[str_const.header][str_const.enc]  ~= str_const.A256GCM then -- tag gets authenticated during decryption
     local _, mac_key, _ = derive_keys(jwt_obj.header.enc, jwt_obj.internal.key)
@@ -824,11 +830,16 @@ function _M.verify_jwt_obj(self, secret, jwt_obj, ...)
   end
 
   -- if jwe, invoked verify jwe
-  if jwt_obj[str_const.header][str_const.enc]  then
+  if jwt_obj.typ == str_const.JWE then
     return verify_jwe_obj(jwt_obj)
   end
 
   local alg = jwt_obj[str_const.header][str_const.alg]
+
+  if alg == nil then
+    jwt_obj[str_const.reason] = "No algorithm supplied"
+    return jwt_obj
+  end
 
   local jwt_str = string_format(str_const.regex_jwt_join_str, jwt_obj.raw_header , jwt_obj.raw_payload , jwt_obj.signature)
 
