@@ -827,6 +827,10 @@ function _M.verify_jwt_obj(self, secret, jwt_obj, ...)
 
   -- if jwe, invoked verify jwe
   if jwt_obj.typ == str_const.JWE then
+    if jwt_obj[str_const.header][str_const.enc] == nil then
+      jwt_obj[str_const.reason] = "JWE without enc"
+      return jwt_object
+    end
     return verify_jwe_obj(jwt_obj)
   end
 
