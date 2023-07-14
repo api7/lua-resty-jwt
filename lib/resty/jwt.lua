@@ -551,7 +551,7 @@ function _M.sign(self, secret_key, jwt_obj)
     end
   end
 
-  if jwt_obj.typ == str_const.JWE or typ == str_const.JWE or jwt_obj.header.enc then
+  if typ == str_const.JWE or jwt_obj.header.enc then
     return sign_jwe(self, secret_key, jwt_obj)
   end
   -- header alg check
@@ -624,6 +624,10 @@ end
 --@param jwt object
 --@return jwt object with reason whether verified or not
 local function verify_jwe_obj(jwt_obj)
+  if jwt_obj[str_const.header][str_const.enc] == nil then
+    jwt_obj[str_const.reason] = "JWE without enc"
+    return jwt_object
+  end
 
   if jwt_obj[str_const.header][str_const.enc]  ~= str_const.A256GCM then -- tag gets authenticated during decryption
     local _, mac_key, _ = derive_keys(jwt_obj.header.enc, jwt_obj.internal.key)
@@ -827,10 +831,6 @@ function _M.verify_jwt_obj(self, secret, jwt_obj, ...)
 
   -- if jwe, invoked verify jwe
   if jwt_obj.typ == str_const.JWE then
-    if jwt_obj[str_const.header][str_const.enc] == nil then
-      jwt_obj[str_const.reason] = "JWE without enc"
-      return jwt_object
-    end
     return verify_jwe_obj(jwt_obj)
   end
 
