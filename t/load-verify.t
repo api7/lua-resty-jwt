@@ -853,6 +853,6 @@ No algorithm supplied
 GET /t
 --- response_body
 false
-signature mismatch: signature
+unsupported alg: HS256
 --- no_error_log
 [error]

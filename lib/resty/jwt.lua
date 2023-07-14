@@ -551,7 +551,7 @@ function _M.sign(self, secret_key, jwt_obj)
     end
   end
 
-  if jwt_obj.typ == str_const.JWE or (jwt_obj.typ == nil and (typ == str_const.JWE or jwt_obj.header.enc)) then
+  if jwt_obj.typ == str_const.JWE or typ == str_const.JWE or jwt_obj.header.enc then
     return sign_jwe(self, secret_key, jwt_obj)
   end
   -- header alg check
