@@ -538,6 +538,50 @@ local function get_secret_str(secret_or_function, jwt_obj)
   end
 end
 
+local pkey = require "resty.openssl.pkey"
+local x509 = require "resty.openssl.x509"
+
+--@function true if s is exactly one DER SEQUENCE (its outer length matches
+-- the string length): the cheap test before parsing s as a key or certificate
+local function is_der_sequence(s)
+  local n = #s
+  if n < 2 or s:byte(1) ~= 0x30 then
+    return false
+  end
+  local b = s:byte(2)
+  if b < 0x80 then
+    return n == 2 + b
+  end
+  local nb = b - 0x80
+  if nb < 1 or nb > 3 or n < 2 + nb then
+    return false
+  end
+  local len = 0
+  for i = 3, 2 + nb do
+    len = len * 256 + s:byte(i)
+  end
+  return n == 2 + nb + len
+end
+
+--@function returns the HMAC secret as a string, refusing empty secrets and
+-- asymmetric key material (PEM or DER keys and certificates)
+local function get_hmac_secret(secret_or_function, jwt_obj, alg)
+  local secret = get_secret_str(secret_or_function, jwt_obj)
+  local rejection
+  if secret == str_const.empty then
+    rejection = "empty secret"
+  elseif secret:find("-----BEGIN", 1, true) then
+    rejection = "PEM key material cannot be used as an HMAC secret"
+  elseif is_der_sequence(secret)
+      and (pkey.new(secret, { format = "DER" }) or x509.new(secret, "DER")) then
+    rejection = "DER key material cannot be used as an HMAC secret"
+  end
+  if rejection then
+    error({reason="invalid secret for " .. alg .. ": " .. rejection})
+  end
+  return secret
+end
+
 --@function sign  : create a jwt/jwe signature from jwt_object
 --@param secret key
 --@param jwt/jwe payload
@@ -561,10 +605,10 @@ function _M.sign(self, secret_key, jwt_obj)
   local alg = jwt_obj[str_const.header][str_const.alg]
   local signature = ""
   if alg == str_const.HS256 then
-    local secret_str = get_secret_str(secret_key, jwt_obj)
+    local secret_str = get_hmac_secret(secret_key, jwt_obj, alg)
     signature = hmac:new(secret_str, hmac.ALGOS.SHA256):final(message)
   elseif alg == str_const.HS512 then
-    local secret_str = get_secret_str(secret_key, jwt_obj)
+    local secret_str = get_hmac_secret(secret_key, jwt_obj, alg)
     signature = hmac:new(secret_str, hmac.ALGOS.SHA512):final(message)
   elseif alg == str_const.RS256 or alg == str_const.RS512 then
     local signer, err = evp.RSASigner:new(secret_key)
