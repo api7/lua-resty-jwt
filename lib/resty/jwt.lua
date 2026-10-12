@@ -355,14 +355,19 @@ local jwe_part_names = { "header", "encrypted key", "initialization vector", "ci
 local jwe_part_may_be_empty = { [2] = true, [4] = true }
 
 --@function check that a token part uses the one canonical base64url form:
--- URL-safe alphabet only, no padding and no non-zero trailing bits (RFC 7515
--- section 2)
+-- URL-safe alphabet only and no non-zero trailing bits (RFC 7515 section 2).
+-- Correct "=" padding is allowed: AWS ALB pads its tokens, and PyJWT
+-- accepts them too (jpadilla/pyjwt#1216).
 local function is_canonical_b64url(s)
-  if s:find("[^A-Za-z0-9_%-]") or #s % 4 == 1 then
+  local stripped = s:gsub("==?$", "")
+  if #stripped ~= #s and #s % 4 ~= 0 then
     return false
   end
-  local decoded = _M:jwt_decode(s)
-  return decoded ~= nil and _M:jwt_encode(decoded) == s
+  if stripped:find("[^A-Za-z0-9_%-]") or #stripped % 4 == 1 then
+    return false
+  end
+  local decoded = _M:jwt_decode(stripped)
+  return decoded ~= nil and _M:jwt_encode(decoded) == stripped
 end
 
 local function parse(self, secret, token_str)
@@ -389,6 +394,9 @@ local function parse(self, secret, token_str)
       end
     elseif not is_canonical_b64url(part) then
       error({reason=str_const.invalid_jwt .. ": non-canonical base64url in " .. part_names[i]})
+    elseif i > (is_jwe and 1 or 2) then
+      -- the signing input and the JWE AAD keep their padding
+      parts[i] = (part:gsub("=+$", ""))
     end
   end
 

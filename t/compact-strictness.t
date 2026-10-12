@@ -102,6 +102,7 @@ nil: false invalid jwt string
                 { "canonical", token },
                 { "sig trailing bits", h .. "." .. p .. "." .. alt_sig },
                 { "sig padded", h .. "." .. p .. "." .. s .. "=" },
+                { "sig over-padded", h .. "." .. p .. "." .. s .. "==" },
                 { "sig whitespace", h .. "." .. p .. "." .. s .. " " },
                 { "header std alphabet", h:gsub("%-", "+"):gsub("_", "/") .. "." .. p .. "." .. s },
                 { "payload padded", h .. "." .. p .. "=." .. s },
@@ -117,7 +118,8 @@ GET /t
 --- response_body
 canonical: true everything is awesome~ :p
 sig trailing bits: false invalid jwt string: non-canonical base64url in signature
-sig padded: false invalid jwt string: non-canonical base64url in signature
+sig padded: true everything is awesome~ :p
+sig over-padded: false invalid jwt string: non-canonical base64url in signature
 sig whitespace: false invalid jwt string: non-canonical base64url in signature
 header std alphabet: false invalid jwt string: non-canonical base64url in header
 payload padded: false invalid jwt string: non-canonical base64url in payload
@@ -201,6 +203,8 @@ tag: false invalid jwt string: empty authentication tag
             ngx.say("canonical: ", tostring(ok.verified))
             ngx.say("tag trailing bits: ", tostring(bad.verified), " ", bad.reason)
             ngx.say("iv padded: ", tostring(padded.verified), " ", padded.reason)
+            local tag_padded = jwt:verify(key, table.concat({ p[1], p[2], p[3], p[4], p[5] .. "==" }, "."))
+            ngx.say("tag padded: ", tostring(tag_padded.verified))
         }
     }
 --- request
@@ -209,6 +213,7 @@ GET /t
 canonical: true
 tag trailing bits: false invalid jwt string: non-canonical base64url in authentication tag
 iv padded: false invalid jwt string: non-canonical base64url in initialization vector
+tag padded: true
 --- no_error_log
 [error]
 
@@ -240,5 +245,35 @@ GET /t
 --- response_body
 parts: 5 ciphertext empty: true
 verified: true []
+--- no_error_log
+[error]
+
+
+
+=== TEST 6: JWS signed over padded parts, as AWS ALB issues them
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local jwt = require "resty.jwt"
+            local hmac = require "resty.hmac"
+            local function b64url_padded(s)
+                return (ngx.encode_base64(s):gsub("%+", "-"):gsub("/", "_"))
+            end
+            local secret = "lua-resty-jwt-compact-strictness"
+            local h = b64url_padded('{"typ":"JWT","alg":"HS256","kid":"a"}')
+            local p = b64url_padded('{"foo":"bar"}')
+            local input = h .. "." .. p
+            local s = b64url_padded(hmac:new(secret, hmac.ALGOS.SHA256):final(input))
+            ngx.say("padded: ", h:sub(-1) == "=", " ", p:sub(-1) == "=", " ", s:sub(-1) == "=")
+            local obj = jwt:verify(secret, input .. "." .. s)
+            ngx.say(tostring(obj.verified), " ", obj.reason, " ", obj.payload and obj.payload.foo)
+        }
+    }
+--- request
+GET /t
+--- response_body
+padded: true true true
+true everything is awesome~ :p bar
 --- no_error_log
 [error]
