@@ -14,6 +14,7 @@ local mt = {
 local string_rep = string.rep
 local string_format = string.format
 local string_sub = string.sub
+local string_find = string.find
 local string_char = string.char
 local table_concat = table.concat
 local ngx_encode_base64 = ngx.encode_base64
@@ -33,8 +34,6 @@ local pairs = pairs
 local str_const = {
   invalid_jwt= "invalid jwt string",
   regex_join_msg = "%s.%s",
-  regex_join_delim = "([^%s]+)",
-  regex_split_dot = "%.",
   regex_jwt_join_str = "%s.%s.%s",
   raw_underscore  = "raw_",
   dash = "-",
@@ -90,14 +89,22 @@ local str_const = {
   everything_awesome = "everything is awesome~ :p"
 }
 
--- @function split string
-local function split_string(str, delim)
-  local result = {}
-  local sep = string_format(str_const.regex_join_delim, delim)
-  for m in str:gmatch(sep) do
-    result[#result+1]=m
+-- @function split a compact serialization on ".", keeping empty parts
+-- (a "dir" JWE has an empty encrypted key). Stops after 6 parts: anything
+-- beyond 5 is invalid anyway.
+local function split_token(str)
+  local parts = {}
+  local start = 1
+  while #parts < 6 do
+    local dot = string_find(str, ".", start, true)
+    if not dot then
+      parts[#parts + 1] = string_sub(str, start)
+      break
+    end
+    parts[#parts + 1] = string_sub(str, start, dot - 1)
+    start = dot + 1
   end
-  return result
+  return parts
 end
 
 -- @function is nil or boolean
@@ -261,6 +268,10 @@ local function parse_jwe(self, preshared_key, encoded_header, encoded_encrypted_
 
   local key, enc_key
   if alg == str_const.DIR then
+    -- RFC 7516 5.2 step 11: direct encryption uses an empty encrypted key
+    if encoded_encrypted_key ~= str_const.empty then
+        error({reason="JWE encrypted key must be empty for dir"})
+    end
     if not preshared_key  then
         error({reason="preshared key must not be null"})
     end
@@ -337,18 +348,62 @@ end
 -- @function parse token - this can be JWE or JWT token
 -- @param token string
 -- @return jwt/jwe tables
+local jws_part_names = { "header", "payload", "signature" }
+-- part 2 (encrypted key) is checked against the alg in parse_jwe; part 4
+-- (ciphertext) may be empty for AES-GCM
+local jwe_part_names = { "header", "encrypted key", "initialization vector", "ciphertext", "authentication tag" }
+local jwe_part_may_be_empty = { [2] = true, [4] = true }
+
+--@function check that a token part uses the one canonical base64url form:
+-- URL-safe alphabet only and no non-zero trailing bits (RFC 7515 section 2).
+-- Correct "=" padding is allowed: AWS ALB pads its tokens, and PyJWT
+-- accepts them too (jpadilla/pyjwt#1216).
+local function is_canonical_b64url(s)
+  local stripped = s:gsub("==?$", "")
+  if #stripped ~= #s and #s % 4 ~= 0 then
+    return false
+  end
+  if stripped:find("[^A-Za-z0-9_%-]") or #stripped % 4 == 1 then
+    return false
+  end
+  local decoded = _M:jwt_decode(stripped)
+  return decoded ~= nil and _M:jwt_encode(decoded) == stripped
+end
+
 local function parse(self, secret, token_str)
-  local tokens = split_string(token_str, str_const.regex_split_dot)
-  local num_tokens = #tokens
-  if num_tokens == 3 then
-    return  parse_jwt(tokens[1], tokens[2], tokens[3])
-  elseif num_tokens == 4  then
-    return parse_jwe(self, secret, tokens[1], nil, tokens[2], tokens[3],  tokens[4])
-  elseif num_tokens == 5 then
-    return parse_jwe(self, secret, tokens[1], tokens[2], tokens[3],  tokens[4], tokens[5])
+  if type(token_str) ~= str_const.string then
+    error({reason=str_const.invalid_jwt})
+  end
+  local parts = split_token(token_str)
+  local num_parts = #parts
+  local part_names
+  if num_parts == 3 then
+    -- an empty signature is invalid as well: alg "none" is not supported
+    part_names = jws_part_names
+  elseif num_parts == 5 then
+    part_names = jwe_part_names
   else
     error({reason=str_const.invalid_jwt})
   end
+  local is_jwe = num_parts == 5
+  for i = 1, num_parts do
+    local part = parts[i]
+    if part == str_const.empty then
+      if not (is_jwe and jwe_part_may_be_empty[i]) then
+        error({reason=str_const.invalid_jwt .. ": empty " .. part_names[i]})
+      end
+    elseif not is_canonical_b64url(part) then
+      error({reason=str_const.invalid_jwt .. ": non-canonical base64url in " .. part_names[i]})
+    elseif i > (is_jwe and 1 or 2) then
+      -- the signing input and the JWE AAD keep their padding
+      parts[i] = (part:gsub("=+$", ""))
+    end
+  end
+
+  if is_jwe then
+    return parse_jwe(self, secret, parts[1], parts[2], parts[3], parts[4], parts[5])
+  end
+  return parse_jwt(parts[1], parts[2], parts[3])
 end
 
 --@function jwt encode : it converts into base64 encoded string. if input is a table, it convets into
