@@ -926,9 +926,9 @@ function _M.verify_jwt_obj(self, secret, jwt_obj, ...)
         return jwt_obj
       end
       -- Try validating against trusted CA's, then a cert passed as secret
-      local trusted = cert:verify_trust(self.trusted_certs_file)
+      local trusted, trust_err = cert:verify_trust(self.trusted_certs_file)
       if not trusted then
-        jwt_obj[str_const.reason] = "Cert used to sign the JWT isn't trusted: " .. err
+        jwt_obj[str_const.reason] = "Cert used to sign the JWT isn't trusted: " .. (trust_err or "unknown error")
         return jwt_obj
       end
     elseif secret ~= nil then
