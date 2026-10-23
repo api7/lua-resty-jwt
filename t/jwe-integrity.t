@@ -318,3 +318,27 @@ A128CBC-HS256: true everything is awesome~ :p | false Claim 'foo' ('bar') return
 A256GCM: true everything is awesome~ :p | false Claim 'foo' ('bar') returned failure
 --- no_error_log
 [error]
+
+
+
+=== TEST 10: JWE operations do not overwrite the worker global underscore
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local jwt = require "resty.jwt"
+            local sentinel = {}
+            rawset(_G, "_", sentinel)
+
+            local token = jwe_t.sign("A128CBC-HS256")
+            local obj = jwt:verify(jwe_t.keys["A128CBC-HS256"], token)
+
+            ngx.say(obj.verified, " ", rawget(_G, "_") == sentinel)
+        }
+    }
+--- request
+GET /t
+--- response_body
+true true
+--- no_error_log
+[error]

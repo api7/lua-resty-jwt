@@ -330,7 +330,7 @@ local function parse_jwe(self, preshared_key, encoded_header, encoded_encrypted_
     error({reason="unsupported payload encryption algorithm :" .. tostring(header.enc)})
   end
 
-  local key, enc_key
+  local key, enc_key, _
   if alg == str_const.DIR then
     -- RFC 7516 5.2 step 11: direct encryption uses an empty encrypted key
     if encoded_encrypted_key ~= str_const.empty then
@@ -582,7 +582,7 @@ local function sign_jwe(self, secret_key, jwt_obj)
   end
 
   -- TODO: implement logic for creating enc key and mac key and then encrypt key
-  local key, encrypted_key, mac_key, enc_key
+  local key, encrypted_key, mac_key, enc_key, _
   local encoded_header = _M:jwt_encode(header)
   local payload_to_encrypt = get_payload_encoder(self)(jwt_obj.payload)
   if alg ==  str_const.DIR then
